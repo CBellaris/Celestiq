@@ -1,0 +1,19 @@
+[
+    {
+        "description": "ComfyUI_custom_nodes",
+        "commands": "set https_proxy=http://127.0.0.1:7890&& git clone https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git",
+        "working_dir": "./outSrc/src_Preload/ComfyUI_custom_nodes",
+        "env_commands": [],
+        "completed": true
+    },
+    {
+        "description": "qwen2vl-gguf",
+        "commands": "huggingface-cli download bartowski/Qwen2-VL-7B-Instruct-GGUF Qwen2-VL-7B-Instruct-Q2_K.gguf --cache-dir ./",
+        "working_dir": "./outSrc/res_Preload/qwen2-VL/qwen2-VL-2B-gguf",
+        "env_commands": [
+            "conda init",
+            "conda activate aigc"
+        ],
+        "completed": true
+    }
+]
