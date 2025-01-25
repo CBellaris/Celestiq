@@ -7,9 +7,11 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+ElectronData
 node_modules
 .DS_Store
 dist
+dist_electron
 dist-ssr
 coverage
 *.local
@@ -18,7 +20,7 @@ coverage
 /cypress/screenshots/
 
 # Editor directories and files
-.vscode/*
+.vscode/
 !.vscode/extensions.json
 .idea
 *.suo
@@ -28,3 +30,9 @@ coverage
 *.sw?
 
 *.tsbuildinfo
+
+.idea/*
+
+outSrc/res_Preload
+outSrc/src_Preload
+ComfyUI

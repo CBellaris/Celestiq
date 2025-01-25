@@ -21,6 +21,27 @@ app.use(createPinia())
 app.use(router)
 
 const vuetify = createVuetify({
+  theme: {
+    defaultTheme: 'dark',
+    themes: {
+      light: {
+        colors: {
+          myc_primary: '#00acc1', // 青蓝
+          myc_error: '#F4511E',   // 深橘
+          myc_success: '#00897b', // 鸭绿
+          myc_pending: '#757575', // 浅灰
+        },
+      },
+      dark: {
+        colors: {
+          myc_primary: '#00acc1', // 青蓝
+          myc_error: '#F4511E',   // 深橘
+          myc_success: '#00897b', // 鸭绿
+          myc_pending: '#757575', // 浅灰
+        },
+      },
+    },
+  },
   components,
   directives,
 })

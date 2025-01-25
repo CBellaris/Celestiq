@@ -1,0 +1,1 @@
+from .modelscope_download import download_ms

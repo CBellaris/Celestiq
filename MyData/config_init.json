@@ -1,0 +1,83 @@
+{
+	"is_dev": false,
+	"is_first_launch": true,
+	"Workflows": [
+		{
+			"key": "Qwen2VL",
+			"name": "图像提示词反推(低显存)",
+			"description": "用于反推图片的提示词，使用gguf量化模型降低显存占用",
+			"ready": false
+		}
+	],
+	"Workflows_setup": [
+		{
+			"key": "Qwen2VL_setup",
+			"name": "图像提示词反推(低显存)",
+			"description": "用于反推图片的提示词，使用gguf量化模型降低显存占用",
+			"ready": false
+		}
+	],
+	"GPU_config": {
+		"GPU_Driver": {
+			"command": "nvidia-smi",
+			"description": "显卡驱动",
+			"state": "pending",
+			"output": ""
+		},
+		"GPU_CUDA": {
+			"command": "nvcc --version",
+			"description": "CUDA",
+			"state": "pending",
+			"output": ""
+		}
+	},
+	"Qwen2VL_gguf_setup": [
+		{
+			"command": "tar -xf .\\outSrc\\src_Preload\\llama-b4397-bin-win-cuda-cu12.4-x64.zip -C .\\outSrc\\Qwen2VL",
+			"description": "解压",
+			"state": "pending",
+			"output": "Command \"tar -xf .\\outSrc\\src_Preload\\llama-b4397-bin-win-cuda-cu12.4-x64.zip -C .\\outSrc\\Qwen2VL\" started.\nCommand finished with exit code 0\n"
+		},
+		{
+			"command": "robocopy .\\outSrc\\Qwen2VL\\llama-b4397-bin-win-cuda-cu12.4-x64 .\\outSrc\\Qwen2VL /E",
+			"description": "安装",
+			"state": "pending",
+			"output": "Command \"robocopy .\\outSrc\\Qwen2VL\\llama-b4397-bin-win-cuda-cu12.4-x64 .\\outSrc\\Qwen2VL /E\" started.\n\r\n-------------------------------------------------------------------------------\r\n\n   ROBOCOPY     ::     Windows 的可靠文件复制                              \r\n-------------------------------------------------------------------------------\r\n\r\n  开始时间: 2025年1月17日 22:32:29\r\n        源: C:\\Users\\NUC\\Desktop\\fullStack\\Celestiq\\outSrc\\Qwen2VL\\llama-b4397-bin-win-cuda-cu12.4-x64\\\r\n      目标: C:\\Users\\NUC\\Desktop\\fullStack\\Celestiq\\outSrc\\Qwen2VL\\\r\n\r\n      文件: \n*.*\r\n\t    \r\n      选项: *.* /S /E /DCOPY:DA /COPY:DAT /R:1000000 /W:30 \r\n\r\n------------------------------------------------------------------------------\r\n\r\n\t                   7\tC:\\Users\\NUC\\Desktop\\fullStack\\Celestiq\\outSrc\\Qwen2VL\\llama-b4397-bin-win-cuda-cu12.4-x64\\\r\n\t*多余目录         -1\tC:\\Users\\NUC\\Desktop\\fullStack\\Celestiq\\outSrc\\Qwen2VL\\._____temp\\\r\n\t*多余目录         -1\tC:\\Users\\NUC\\Desktop\\fullStack\\Celestiq\\outSrc\\Qwen2VL\\llama-b4397-bin-win-cuda-cu12.4-x64\\\r\n\t    新文件    \t\t  400896\tggml-base.dll\n\r 32%  \r 65%  \r 98%  \r100%  \r\n\t    пбнд╪Ч    \t\t  418816\tggml-cpu.dll\n\r 31%  \r 62%  \r 93%  \r100%  \r\n\n\t    пбнд╪Ч    \t\t 344.8 m\tggml-cuda.dll\n\r  0.2%\n\r  0.5%\n\r  0.8%\n\r  1.1%\n\r  1.4%\n\r  1.7%\n\r  2.0%\n\r  2.3%\n\r  2.6%\n\r  2.8%\n\r  3.1%\n\r  3.4%\n\r  3.7%\n\r  4.0%\n\r  4.3%\n\r  4.6%\n\r  4.9%\n\r  5.2%\n\r  5.5%\n\r  5.7%\n\r  6.0%\n\r  6.3%\n\r  6.6%\n\r  6.9%\n\r  7.2%\n\r  7.5%\n\r  7.8%\n\r  8.1%\n\r  8.4%\n\r  8.6%\n\r  8.9%\n\r  9.2%\n\r  9.5%\n\r  9.8%\n\r 10.1%\n\r 10.4%\n\r 10.7%\n\r 11.0%\n\r 11.3%\n\r 11.5%\r 11.8%\n\r 12.1%\n\r 12.4%\n\r 12.7%\n\r 13.0%\n\r 13.3%\n\r 13.6%\n\r 13.9%\n\r 14.2%\n\r 14.4%\n\r 14.7%\n\r 15.0%\r 15.3%\n\r 15.6%\n\r 15.9%\n\r 16.2%\n\r 16.5%\n\r 16.8%\n\r 17.1%\n\r 17.3%\n\r 17.6%\n\r 17.9%\n\r 18.2%\n\r 18.5%\n\r 18.8%\n\r 19.1%\n\r 19.4%\n\r 19.7%\n\r 20.0%\n\r 20.2%\n\r 20.5%\n\r 20.8%\n\r 21.1%\n\r 21.4%\n\r 21.7%\n\r 22.0%\n\r 22.3%\n\r 22.6%\n\r 22.9%\n\r 23.1%\n\r 23.4%\n\r 23.7%\n\r 24.0%\n\r 24.3%\n\r 24.6%\n\r 24.9%\n\r 25.2%\n\r 25.5%\n\r 25.8%\n\r 26.0%\n\r 26.3%\n\r 26.6%\n\r 26.9%\n\r 27.2%\n\r 27.5%\n\r 27.8%\n\r 28.1%\n\r 28.4%\n\r 28.7%\n\r 28.9%\n\r 29.2%\n\r 29.5%\n\r 29.8%\n\r 30.1%\n\r 30.4%\n\r 30.7%\n\r 31.0%\n\r 31.3%\n\r 31.6%\n\r 31.8%\n\r 32.1%\n\r 32.4%\n\r 32.7%\n\r 33.0%\n\r 33.3%\n\r 33.6%\n\r 33.9%\n\r 34.2%\n\r 34.5%\n\r 34.7%\n\r 35.0%\n\r 35.3%\n\r 35.6%\n\r 35.9%\n\r 36.2%\n\r 36.5%\n\r 36.8%\n\r 37.1%\n\r 37.4%\n\r 37.6%\n\r 37.9%\n\r 38.2%\n\r 38.5%\n\r 38.8%\n\r 39.1%\n\r 39.4%\n\r 39.7%\n\r 40.0%\n\r 40.3%\n\r 40.5%\n\r 40.8%\n\r 41.1%\n\r 41.4%\n\r 41.7%\n\r 42.0%\n\r 42.3%\n\r 42.6%\n\r 42.9%\n\r 43.2%\n\r 43.4%\n\r 43.7%\n\r 44.0%\n\r 44.3%\n\r 44.6%\n\r 44.9%\n\r 45.2%\n\r 45.5%\n\r 45.8%\n\r 46.1%\n\r 46.3%\n\r 46.6%\n\r 46.9%\n\r 47.2%\n\r 47.5%\n\r 47.8%\n\r 48.1%\n\r 48.4%\n\r 48.7%\n\r 49.0%\n\r 49.2%\n\r 49.5%\n\r 49.8%\n\r 50.1%\n\r 50.4%\n\r 50.7%\n\r 51.0%\n\r 51.3%\n\r 51.6%\n\r 51.9%\n\r 52.1%\n\r 52.4%\n\r 52.7%\n\r 53.0%\n\r 53.3%\n\r 53.6%\n\r 53.9%\n\r 54.2%\n\r 54.5%\n\r 54.8%\n\r 55.0%\n\r 55.3%\n\r 55.6%\n\r 55.9%\n\r 56.2%\n\r 56.5%\n\r 56.8%\n\r 57.1%\n\r 57.4%\n\r 57.7%\n\r 57.9%\n\r 58.2%\n\r 58.5%\n\r 58.8%\n\r 59.1%\n\r 59.4%\n\r 59.7%\n\r 60.0%\n\r 60.3%\n\r 60.6%\n\r 60.8%\n\r 61.1%\n\r 61.4%\n\r 61.7%\n\r 62.0%\n\r 62.3%\n\r 62.6%\n\r 62.9%\n\r 63.2%\n\r 63.5%\n\r 63.7%\n\r 64.0%\n\r 64.3%\n\r 64.6%\n\r 64.9%\n\r 65.2%\n\r 65.5%\n\r 65.8%\n\r 66.1%\n\r 66.4%\n\r 66.6%\n\r 66.9%\n\r 67.2%\n\r 67.5%\n\r 67.8%\n\r 68.1%\n\r 68.4%\n\r 68.7%\n\r 69.0%\n\r 69.3%\n\r 69.5%\n\r 69.8%\n\r 70.1%\n\r 70.4%\n\r 70.7%\n\r 71.0%\n\r 71.3%\n\r 71.6%\n\r 71.9%\n\r 72.2%\n\r 72.4%\n\r 72.7%\n\r 73.0%\n\r 73.3%\n\r 73.6%\n\r 73.9%\n\r 74.2%\n\r 74.5%\n\r 74.8%\n\r 75.1%\n\r 75.3%\n\r 75.6%\n\r 75.9%\n\r 76.2%\n\r 76.5%\n\r 76.8%\n\r 77.1%\n\r 77.4%\n\r 77.7%\n\r 78.0%\n\r 78.2%\n\r 78.5%\n\r 78.8%\n\r 79.1%\n\r 79.4%\n\r 79.7%\n\r 80.0%\n\r 80.3%\n\r 80.6%\n\r 80.9%\n\r 81.1%\n\r 81.4%\n\r 81.7%\n\r 82.0%\n\r 82.3%\n\r 82.6%\n\r 82.9%\n\r 83.2%\n\r 83.5%\n\r 83.8%\n\r 84.0%\n\r 84.3%\n\r 84.6%\n\r 84.9%\n\r 85.2%\n\r 85.5%\n\r 85.8%\n\r 86.1%\n\r 86.4%\n\r 86.7%\n\r 86.9%\n\r 87.2%\n\r 87.5%\n\r 87.8%\n\r 88.1%\n\r 88.4%\n\r 88.7%\n\r 89.0%\n\r 89.3%\n\r 89.6%\n\r 89.8%\n\r 90.1%\n\r 90.4%\n\r 90.7%\n\r 91.0%\n\r 91.3%\n\r 91.6%\n\r 91.9%\n\r 92.2%\n\r 92.5%\n\r 92.7%\n\r 93.0%\n\r 93.3%\n\r 93.6%\n\r 93.9%\n\r 94.2%\n\r 94.5%\n\r 94.8%\n\r 95.1%\n\r 95.4%\n\r 95.6%\n\r 95.9%\n\r 96.2%\n\r 96.5%\n\r 96.8%\n\r 97.1%\n\r 97.4%\n\r 97.7%\n\r 98.0%\n\r 98.3%\n\r 98.5%\n\r 98.8%\n\r 99.1%\n\r 99.4%\n\r 99.7%\n\r100%  \n\r\n\t    пбнд╪Ч    \t\t   58880\t\nggml-rpc.dll\n\r100%  \n\r\n\n\t    пбнд╪Ч    \t\t   65024\tggml.dll\n\r100%  \n\r\n\t    пбнд╪Ч    \t\t  740864\t\nllama-qwen2vl-cli.exe\n\r 35%  \n\r 70%  \n\r100%  \n\r\n\n\t    пбнд╪Ч    \t\t   1.1 m\tllama.dll\n\r 22%  \n\r 44%  \n\r 66%  \n\r 88%  \n\r100%  \n\r\n\n\r\n------------------------------------------------------------------------------\r\n\r\n                  总数        复制        跳过       不匹配        失败        其他\r\n\n       目录:         1         0         1         0         0         2\r\n       文件:         7         7         0         0         0         0\r\n       字节:  347.56 m  347.56 m         0         0         0         0\r\n       时间:   0:00:00   0:00:00                       0:00:00   0:00:00\r\n\r\n\r\n       速度:           463,679,837 字节/秒。\r\n       速度:            26,531.973 MB/分钟。\r\n   已结束: 2025年1月17日 22:32:30\r\n\r\n\nCommand finished with exit code 3\n"
+		},
+		{
+			"command": "rd /S /Q .\\outSrc\\Qwen2VL\\llama-b4397-bin-win-cuda-cu12.4-x64",
+			"description": "清理",
+			"state": "pending",
+			"output": "Command \"rd /S /Q .\\outSrc\\Qwen2VL\\llama-b4397-bin-win-cuda-cu12.4-x64\" started.\nCommand finished with exit code 0\n"
+		}
+	],
+	"Qwen2VL_gguf_model": [
+		{
+			"description": "最高量化模型(4.5G)，运行占用显存1.5G",
+			"model_list": [
+				{
+					"command": "pyEnv\\Scripts\\modelscope download --model Qciris/Qwen2-VL-7B-Instruct-GGUF mmproj-Qwen2-VL-7B-Instruct-f16.gguf --local_dir ./outSrc/Qwen2VL",
+					"description": "下载模型(1/2)",
+					"state": "pending",
+					"output": "",
+					"progress": 0,
+					"downloaded": "0B",
+					"totalSize": "0B",
+					"remainingTime": "00:00",
+					"speed": "0B/s"
+				},
+				{
+					"command": "pyEnv\\Scripts\\modelscope download --model Qciris/Qwen2-VL-7B-Instruct-GGUF Qwen2-VL-7B-Instruct-Q2_K.gguf --local_dir ./outSrc/Qwen2VL",
+					"description": "下载模型(2/2)",
+					"state": "pending",
+					"output": "",
+					"progress": 0,
+					"downloaded": "0B",
+					"totalSize": "0B",
+					"remainingTime": "00:00",
+					"speed": "0B/s"
+				}
+			]
+		}
+	]
+}

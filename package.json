@@ -4,17 +4,57 @@
   "private": true,
   "type": "module",
   "main": "main.js",
+  "description": "celestiq",
+  "author": "Qciris",
   "scripts": {
     "dev": "vite",
-    "start": "nodemon --exec electron . --watch ./ --ext .js,.html,.css,.vue",
+    "start": "nodemon --exec electron . --watch ./ --ext .js,.html,.css,.vue --ignore pyEnv/",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint . --fix"
+    "lint": "eslint . --fix",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.Qciris.Celestiq",
+    "productName": "Celestiq",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "pathManager.js",
+      "main_test/**/*",
+      "main_components/**/*",
+      "preload/**/*",
+      "node_modules/**/*",
+      "MyData/**/*",
+      "public/**/*",
+      "outSrc/**/*",
+      "pyEnv/**/*"
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "asar": false,
+    "mac": {
+      "icon": "src/assets/icon.icns"
+    },
+    "win": {
+      "icon": "src/assets/icon.ico"
+    }
   },
   "dependencies": {
+    "axios": "^1.7.9",
+    "chokidar": "^4.0.3",
     "electron-store": "^10.0.0",
+    "iconv-lite": "^0.6.3",
+    "jschardet": "^3.1.4",
     "marked": "^15.0.4",
     "pinia": "^2.2.6",
+    "sharp": "^0.33.5",
+    "tree-kill": "^1.2.2",
     "vue": "^3.5.13",
     "vue-router": "^4.4.5",
     "vuetify": "^3.7.6"
@@ -24,6 +64,7 @@
     "@mdi/font": "^7.4.47",
     "@vitejs/plugin-vue": "^5.2.1",
     "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
     "eslint": "^9.14.0",
     "eslint-plugin-vue": "^9.30.0",
     "nodemon": "^3.1.9",

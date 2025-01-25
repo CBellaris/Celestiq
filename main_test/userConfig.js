@@ -1,12 +1,9 @@
 import Store from "electron-store";
-import path from "path";
+import { resolveAppPath } from '../pathManager.js';
+
 
 const userStore = new Store({
-  cwd: path.resolve(process.cwd(), './MyData'),
-  defaults: {
-    existWorkflow: [],
-    selectableWorkflow:[]
-  }
+  cwd: resolveAppPath('./MyData'),
 });
 
 // 获取值
@@ -51,4 +48,4 @@ function storeOperations(ipcMain) {
   })
 }
 
-export default storeOperations;
+export {storeOperations};

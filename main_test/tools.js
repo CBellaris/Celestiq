@@ -1,6 +1,6 @@
 import fs from "fs"
-import path from "path"
 import {marked} from "marked";
+import { resolveAppPath } from '../pathManager.js';
 
 const preprocessMediaTags = (markdown, baseDir) => {
   // 正则表达式匹配 <source> 标签中的 src 属性
@@ -33,10 +33,10 @@ function readMarkdown(ipcMain) {
   // 处理 Markdown 文件读取请求
   ipcMain.handle("readMarkdown", async (event, fileName) => {
     try {
-      const filePath = path.resolve(process.cwd(), 'outSrc/mdFile', fileName)
+      const filePath = resolveAppPath('./outSrc/mdFile', fileName)
       const data = fs.readFileSync(filePath, "utf-8")
 
-      const parsedMarkdown = preprocessMediaTags(data, 'outSrc/mdFile/asset')
+      const parsedMarkdown = preprocessMediaTags(data, './outSrc/mdFile/asset')
       return { success: true, content: parsedMarkdown }
     } catch (err) {
       console.error("Error reading file:", err)
@@ -48,7 +48,7 @@ function readMarkdown(ipcMain) {
 function readJson(ipcMain){
   ipcMain.handle("readJson", async (event, fileName) => {
     try {
-      const filePath = path.resolve(process.cwd(), 'outSrc', fileName)
+      const filePath = resolveAppPath('./outSrc/taskFile', fileName)
       const data = JSON.parse(fs.readFileSync(filePath, "utf-8"))
       return { success: true, content: data }
     } catch (err) {

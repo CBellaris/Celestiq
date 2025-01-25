@@ -1,31 +1,53 @@
-import { app, BrowserWindow, ipcMain, protocol } from 'electron'
+import { app, BrowserWindow, ipcMain, protocol ,shell } from 'electron'
 import path from "path"
+import { resolveAppPath } from './pathManager.js';
 import {readMarkdown, readJson} from "./main_test/tools.js";
-import {setupWorkflow} from "./main_test/setupWorkflow.js";
-import Store from "./main_test/userConfig.js"
+import {imageHandler} from "./main_test/imageHandler.js";
+import {Qwen2VLHandler} from "./main_test/Qwen2VL.js";
+import {storeOperations} from "./main_test/userConfig.js"
+import {handleFlask} from "./main_test/handleFlask.js";
+
+import {run_cmd_handler} from "./main_components/run_cmd.js"
 import fs from 'fs'
 
+let mainWindow = null; // 用于保存主窗口实例
+
 const createWindow = () => {
-  const win = new BrowserWindow({
-    width: 1200,
+  mainWindow = new BrowserWindow({
+    //width: 1050,
+    width: 1300,
     height: 800,
+    frame: false, // 移除原生标题栏
     webPreferences: {
-      preload: path.resolve(process.cwd(), './preload/preload.js'), // 指定预加载脚本
+      preload: resolveAppPath('./preload/preload.js'), // 指定预加载脚本
       contextIsolation: true, // 强制隔离上下文
       enableRemoteModule: false, // 禁用 remote 模块
-      webSecurity: false
+      // webSecurity: false
     }
   })
-
-  win.loadURL('http://localhost:5173/')
-  win.webContents.openDevTools()
+  mainWindow.loadURL('http://localhost:5173/')
+  //mainWindow.loadFile(resolveAppPath('dist/index.html'))  // 加载构建后的 Vue 前端页面
+  mainWindow.webContents.openDevTools()
 }
 
-app.setPath('userData', path.resolve(process.cwd(), './ElectronData'))
+app.setPath('userData', resolveAppPath('./ElectronData'))
 app.whenReady().then(() => {
   protocol.handle('local', async (request) => {
     const url = decodeURIComponent(request.url.replace('local://', '')); // 去掉协议头并解码
-    const filePath = path.resolve(process.cwd(), url); // 拼接为绝对路径
+    function fixDriveLetterAndResolvePath(url) {
+      // 检查路径是否以字母开头，后面跟着'/'，这可能是丢失了冒号的Windows绝对路径
+      const driveLetterPattern = /^[A-Za-z](?=\/)/;
+      if (driveLetterPattern.test(url)) {
+          // 在盘符后添加冒号，并将所有斜杠替换为正确的分隔符
+          const fixedPath = url.replace(driveLetterPattern, match => match + ':');
+          const normalizedPath = path.normalize(fixedPath.split('/').join(path.sep));
+          return normalizedPath;
+      }
+
+      // 如果不是上述情况，则是相对于项目的路径
+      return resolveAppPath(url);
+    }
+    const filePath = fixDriveLetterAndResolvePath(url);
 
     // 常见 MIME 类型映射
     const mimeTypes = {
@@ -88,13 +110,49 @@ app.whenReady().then(() => {
   });
   createWindow()
 
+  // 在主进程注册事件监听
+  setupMainProcessEvents()
+  imageHandler(ipcMain)
+
+  // 注册函数事件
   readMarkdown(ipcMain)
   readJson(ipcMain)
-  setupWorkflow(ipcMain)
-  Store(ipcMain)
+  storeOperations(ipcMain)
+  Qwen2VLHandler(ipcMain)
+  handleFlask(ipcMain)
+
+  run_cmd_handler(ipcMain)
+
+  // 用于打开外部页面
+  ipcMain.on('open-external', (event, url) => {
+    shell.openExternal(url);
+  });
 })
 
 app.on('window-all-closed', () => {
   // eslint-disable-next-line no-undef
   if (process.platform !== 'darwin') app.quit()
 })
+
+// 设置自定义窗口事件
+function setupMainProcessEvents() {
+  ipcMain.on('window-minimize', () => {
+    if (mainWindow) mainWindow.minimize();
+  });
+
+  ipcMain.on('window-toggle-maximize', () => {
+    if (mainWindow) {
+      if (mainWindow.isMaximized()) {
+        mainWindow.unmaximize();
+      } else {
+        mainWindow.maximize();
+      }
+    }
+  });
+
+  ipcMain.on('window-close', () => {
+    if (mainWindow) mainWindow.close();
+  });
+}
+
+
