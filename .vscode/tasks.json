@@ -1,0 +1,168 @@
+{
+    "version": "2.0.0",
+     
+    "windows": {
+        "options": {
+            "shell": {
+            "executable": "cmd.exe",
+            "args": [
+                "/C",
+                // The path to VsDevCmd.bat depends on the version of Visual Studio you have installed.
+                "vcvarsall.bat",
+                "x64",
+                "&&"
+            ]
+            }
+        }
+     },
+
+    "tasks": [
+        {
+            "label": "cmake build glfw",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}\\vender\\glfw-3.4\\build", // 指向构建目录
+                "--config",
+                "Debug" // 或 "Release"，根据需要
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "cmake configure glfw",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "${workspaceFolder}\\vender\\glfw-3.4",
+                "-B",
+                "${workspaceFolder}\\vender\\glfw-3.4\\build", // 指定构建目录
+                "-G",
+                "Visual Studio 17 2022" // 指定生成器
+            ],
+            "group": "none"
+        },
+        {
+            "label": "cmake build assimp",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}\\vender\\assimp\\build", // 指向构建目录
+                "--config",
+                "Debug" // 或 "Release"，根据需要
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "cmake configure assimp",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "${workspaceFolder}\\vender\\assimp",
+                "-B",
+                "${workspaceFolder}\\vender\\assimp\\build", // 指定构建目录
+                "-G",
+                "Visual Studio 17 2022" // 指定生成器
+            ],
+            "group": "none"
+        },
+        {
+            "label": "Copy res files",
+            "type": "shell",
+            "command": "xcopy", 
+            "args": [
+                "${workspaceFolder}\\res\\*", // 源路径
+                "${workspaceFolder}\\build\\res\\", // 目标路径
+                "/S",   // 递归复制所有子目录，包括空目录
+                "/I",   // 如果目标不存在，则假定目标必须是目录
+                "/Y"    // 覆盖已存在的文件而不提示
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "build_Celestiq",
+            "type": "shell",
+            "command": "cl.exe",
+            "args": [
+                "/std:c++20",
+                "/EHsc",
+                "/Zi", // 需要调试时启用
+                //"/Od", // 禁用优化，确保断点准确
+                "/source-charset:utf-8", // 修复字符集警告
+                "/Fe:${workspaceFolder}\\build\\Celestiq.exe", // 输出文件路径
+                "/Fo:${workspaceFolder}\\build\\",  // 编译中间文件路径
+                "/Fd:${workspaceFolder}\\build\\", // 指定.pdb文件路径
+                "/I${workspaceFolder}\\App",
+                "/I${workspaceFolder}\\src",
+                "/I${workspaceFolder}\\vender",
+                "/I${workspaceFolder}\\vender\\glfw-3.4\\include",
+                "/I${workspaceFolder}\\vender\\stb_image",
+                "/I${workspaceFolder}\\vender\\assimp\\include",
+                "/I${workspaceFolder}\\vender\\assimp\\build\\include",
+                "/I${workspaceFolder}\\vender\\json\\single_include",
+                "/I${workspaceFolder}\\vender\\imgui",
+                "/I${workspaceFolder}\\vender\\imgui\\backends",
+                "/I${workspaceFolder}\\vender\\vulkan\\include",
+                "${workspaceFolder}\\src\\*.cpp", // 源文件
+                "${workspaceFolder}\\App\\*.cpp", // 源文件
+                "${workspaceFolder}\\vender\\stb_image\\stb_image.cpp", // stb_image库源文件
+                "${workspaceFolder}\\vender\\imgui\\*.cpp", // imgui库源文件
+                "${workspaceFolder}\\vender\\imgui\\backends\\imgui_impl_glfw.cpp", // imgui库源文件
+                "${workspaceFolder}\\vender\\imgui\\backends\\imgui_impl_vulkan.cpp", // imgui库源文件
+                "/MDd", // 使用动态链接库(uncheck reason)
+                "/link", // 链接库
+                "${workspaceFolder}\\vender\\glfw-3.4\\build\\src\\Debug\\glfw3.lib", 
+                "${workspaceFolder}\\vender\\assimp\\build\\lib\\Debug\\assimp-vc143-mtd.lib", 
+                "${workspaceFolder}\\vender\\vulkan\\lib\\vulkan-1.lib", 
+                // 必须的Window SDK库
+                "gdi32.lib",
+                "user32.lib",
+                "shell32.lib",
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "dependsOn": "Copy res files", // 复制res文件到build
+            "problemMatcher": ["$msCompile"]
+        },
+        {
+            "label": "Compile GLSL",
+            "type": "shell",
+            "command": "${workspaceFolder}\\vender\\vulkan\\bin\\glslc.exe",
+            "options": {
+                "cwd": "${workspaceFolder}/res/shader_spv"
+            },
+            "args": [
+              "${workspaceFolder}\\res\\shader_glsl\\${input:glslFile}",
+              "-c"
+            ],
+            "group": {
+              "kind": "build",
+              "isDefault": true
+            },
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+          "id": "glslFile",
+          "type": "promptString",
+          "description": "Enter the path to the GLSL file (.vert/.frag)",
+          "default": "FirstTriangle.vert.shader"
+        }
+    ]
+}
