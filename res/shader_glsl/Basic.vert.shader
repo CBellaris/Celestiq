@@ -7,12 +7,11 @@ layout(location = 2) in vec2 inTexCoords;
 layout(location = 3) in vec3 inTangent;
 layout(location = 4) in float inTangentW;
 
-layout(set = 0, binding = 0) uniform MVP {
-    mat4 model;
-    mat4 view;
-    mat4 proj;
-} mvp;
+layout(binding = 0) uniform Camera {
+    mat4 viewProjectionMatrix; // 视图投影矩阵
+    vec3 cameraPosition;       // 摄像机位置
+};
 
 void main() {
-    gl_Position = mvp.proj * mvp.view * mvp.model * vec4(inPosition, 1.0);
+    gl_Position = viewProjectionMatrix * vec4(inPosition, 1.0);
 }

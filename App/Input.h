@@ -2,6 +2,9 @@
 
 #include <stdint.h>
 #include <iostream>
+#include <map>
+#include <vector>
+#include <functional>
 
 #include <glm/glm.hpp>
 
@@ -189,6 +192,68 @@ namespace Celestiq {
 	class Input
 	{
 	public:
+		static Input& getInstance() {
+        	static Input instance; 
+    	    return instance;
+    	}
+
+    	Input(const Input&) = delete;
+    	Input& operator=(const Input&) = delete;
+
+		using KeyCallback = std::function<void()>;
+		// 注册按键事件回调
+    	void registerKeyCallback(KeyCode key, KeyState state, KeyCallback callback) {
+    	    keyCallbacks[{key, state}].push_back(callback);
+    	}
+
+		// 每帧更新
+		void update()
+		{
+			pull();
+			if(IsKeyPressed(KeyCode::Tab)){
+				if(cursorMode == CursorMode::Normal){
+					SetCursorMode(CursorMode::Locked);
+					cursorMode = CursorMode::Locked;
+				}else if(cursorMode == CursorMode::Locked){
+					SetCursorMode(CursorMode::Normal);
+					cursorMode = CursorMode::Normal;
+				}
+			}
+			// 遍历注册的键盘事件
+			for (auto& [keyType, callbacks] : keyCallbacks) {
+				KeyCode key = keyType.first;
+				KeyState type = keyType.second;
+	
+				bool triggered = false;
+				if (type == KeyState::Pressed) {
+					triggered = IsKeyPressed(key);
+				} else if (type == KeyState::Held) {
+					triggered = IsKeyDown(key);
+				}
+	
+				if (triggered) {
+					for (auto& cb : callbacks)
+						cb();
+				}
+			}
+			previousKeyStates = currentKeyStates;
+		}
+
+		CursorMode GetCursorMode() const
+		{
+			return cursorMode;
+		}
+
+		// 检测按下瞬间
+		bool IsKeyPressed(KeyCode keycode)
+		{
+		    bool isCurrentlyDown = currentKeyStates[keycode];
+		    bool wasPreviouslyDown = previousKeyStates[keycode];
+			
+		    return isCurrentlyDown && !wasPreviouslyDown;
+		}
+
+		// 检测按下保持
 		static bool IsKeyDown(KeyCode keycode)
 		{
 			GLFWwindow* windowHandle = Application::Get().GetWindowHandle();
@@ -217,6 +282,23 @@ namespace Celestiq {
 			GLFWwindow* windowHandle = Application::Get().GetWindowHandle();
 			glfwSetInputMode(windowHandle, GLFW_CURSOR, GLFW_CURSOR_NORMAL + (int)mode);
 		}
-	};
+	private:
+		Input() = default; 
+		~Input() = default; 
+		CursorMode cursorMode = CursorMode::Normal;
+		// 记录上一帧的按键状态
+		std::unordered_map<KeyCode, bool> previousKeyStates;
+		// 记录当前帧的按键状态
+		std::unordered_map<KeyCode, bool> currentKeyStates;
+		// 查询所有按键状态
+		void pull()
+		{
+			for (KeyCode key = KeyCode::Space; key <= KeyCode::Menu; key = (KeyCode)((int)key + 1)) {
+				currentKeyStates[key] = IsKeyDown(key);
+			}
+		}
 
+		// <(KeyCode, KeyEventType), 回调列表>
+		std::map<std::pair<KeyCode, KeyState>, std::vector<KeyCallback>> keyCallbacks;
+	};
 }

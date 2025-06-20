@@ -9,11 +9,15 @@
 #define IMGUI_ENABLE_VIEWPORTS    // 启用 Multi-Viewport
 #include "imgui.h"
 #include "vulkan/vulkan.h"
-#include "VKBase.h"
 
 void check_vk_result(VkResult err);
 
 struct GLFWwindow;
+
+namespace Celestiq::Vulkan {
+	class commandBuffer;
+	class commandPool;
+}
 
 namespace Celestiq {
     class Layer
@@ -70,9 +74,9 @@ namespace Celestiq {
 		static const VkPhysicalDeviceProperties& GetPhysicalDeviceProperties();
 		static const uint32_t GetQueueFamilyIndex();
 
-		static const Vulkan::commandPool& CommandPool_Graphics();
-		static const Vulkan::commandPool& CommandPool_Compute();
-		static const Vulkan::commandBuffer& CommandBuffer_Transfer();
+		const std::shared_ptr<Vulkan::commandPool> GetCommandPoolGraphics();
+		const std::shared_ptr<Vulkan::commandPool> GetCommandPoolCompute();
+		const std::shared_ptr<Vulkan::commandBuffer> GetCommandBufferTransfer();
 
 		static void SubmitResourceFree(std::function<void()>&& func);
 
@@ -96,6 +100,9 @@ namespace Celestiq {
 		std::vector<std::shared_ptr<Layer>> m_LayerStack;
 		std::function<void()> m_MenubarCallback;
 
+		std::shared_ptr<Vulkan::commandPool> g_commandPool_graphics;
+		std::shared_ptr<Vulkan::commandPool> g_commandPool_compute;
+		std::shared_ptr<Vulkan::commandBuffer> g_commandBuffer_transfer;
 	};
 
 	// Implemented by CLIENT

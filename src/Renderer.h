@@ -1,6 +1,11 @@
+#pragma once
 #include "vulkan/vulkan.h"
 #include "VKBase.h"
 #include "Application.h"
+#include "Mesh.h"
+#include "Camera.h"
+#include "Scene.h"
+#include "Material.h"
 #include <memory>
 
 using namespace Celestiq::Vulkan;
@@ -29,9 +34,18 @@ public:
         VkImageAspectFlags aspect,
         descriptorPool* pool);
 
+    const VkDescriptorSetLayout GetDescriptorSetLayout() const { return layout->getHandle(); }
     const VkDescriptorSet GetDescriptorSet() const { return set->getHandle(); }
+    const VkImage GetImage() const { return imageMem->Image(); }
     const VkImageView GetImageView() const { return view->getHandle(); }
     const VkImageView* GetImageViewPtr() const { return view->Address(); }
+};
+
+struct Params {
+    int frameIndex = 0;
+    int debugMode = 0;
+    float padding1;
+    float padding2;
 };
 
 
@@ -41,37 +55,77 @@ public:
     ~Renderer() = default;
 
     void Init();
+    void update();
     void drawFrame(VkExtent2D newExtent);
     // void Cleanup();
+
+    Params& getParams() { return r_params; }
+    uint32_t getTriCount() const { return r_scene->getTriCount(); }
 
 private:
     void resizeImageFramebuffers(VkExtent2D newExtent);
     void resizePipeline(VkExtent2D newExtent, VkCommandBuffer commandBuffer);
+    void bindImageOfComputePipeline();
     // 栅栏和信号量
     std::unique_ptr<fence> r_fence;
     // std::unique_ptr<semaphore> r_semaphore_imageIsAvailable;
     // std::unique_ptr<semaphore> r_semaphore_renderingIsOver;
 
+    std::unique_ptr<sampler> samp;
+
     std::unique_ptr<commandBuffer> r_commandBuffer;
-    std::unique_ptr<commandPool> r_commandPool;
+
     std::unique_ptr<renderPass> r_renderPass;
+
     std::unordered_map<std::string, std::unique_ptr<shaderModule>> r_shaders;
-    std::unique_ptr<pipelineLayout> r_pipelineLayout_triangle;
-    std::unique_ptr<pipeline> r_pipeline_triangle;
+
+    std::unique_ptr<pipelineLayout> r_pipelineLayout;
+    std::unique_ptr<pipeline> r_pipeline;
+    std::unique_ptr<pipelineLayout> r_pipelineLayout_compute;
+    std::unique_ptr<pipeline> r_pipeline_compute;
 
     std::unique_ptr<descriptorPool> r_descriptorPool;
+
+    // 场景
+    std::unique_ptr<Scene> r_scene;
+
+    // 常数
+    Params r_params;
+    std::unique_ptr<uniformBuffer> r_constantBuffer;
+
+    // 计算阶段 Attachments
+    std::unique_ptr<renderableImageAttachment> r_computeImage_writeOnly;
+    std::unique_ptr<renderableImageAttachment> r_computeImage_readOnly;
+    bool r_computeImage_recreate = true;
+    std::unique_ptr<descriptorSetLayout> r_descriptorSetLayout_compute;
+    std::unique_ptr<descriptorSet> r_descriptorSet_compute;
+
+    // 光照阶段 Attachments
     std::unique_ptr<renderableImageAttachment> r_onRenderImage;
+    // frameBuffers
     std::unique_ptr<framebuffer> r_framebuffers;
+    // 光线阶段需要采样compute pass的图像
+    // std::unique_ptr<descriptorSetLayout> r_descriptorSetLayout_lighting;
+    // std::unique_ptr<descriptorSet> r_descriptorSet_lighting;
+
+    // 两个pass之间需要管线屏障
+    // std::array<VkImageMemoryBarrier, 1> barriers;
 
     VkExtent2D extent = { 500, 500 };
     VkFormat imageFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
-public:
-    //该函数用于将命令缓冲区提交到用于图形的队列
-    static VkResult SubmitCommandBuffer_Graphics(VkSubmitInfo& submitInfo, VkFence fence = VK_NULL_HANDLE);
-    //该函数用于在渲染循环中将命令缓冲区提交到图形队列的常见情形
-    static VkResult SubmitCommandBuffer_Graphics(VkCommandBuffer commandBuffer,
-        VkSemaphore semaphore_imageIsAvailable = VK_NULL_HANDLE, VkSemaphore semaphore_renderingIsOver = VK_NULL_HANDLE, VkFence fence = VK_NULL_HANDLE,
-        VkPipelineStageFlags waitDstStage_imageIsAvailable = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-    static VkResult SubmitCommandBuffer_Graphics(VkCommandBuffer commandBuffer, VkFence fence = VK_NULL_HANDLE);
+    std::unique_ptr<Mesh> r_mesh_screen;
+
+    float deltaTime = 0.0f; // 当前帧与上一帧的时间差
+    float lastTime = 0.0f; // 上一帧的时间
+    float currentTime = 0.0f;
+
+
+
+    void transitionImageLayout(VkCommandBuffer cmd, const std::vector<renderableImageAttachment*>& attachments, 
+                            VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask,
+                            VkImageLayout oldLayout, VkImageLayout newLayout,
+                            VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask);
+
+    // void transitionColorAttachmentsToShaderRead(VkCommandBuffer cmd, const std::vector<renderableImageAttachment*>& attachments);
 };

@@ -4,6 +4,7 @@
             "name": "Win64", // 根据需要调整
             "includePath": [
                 "${workspaceFolder}/App",
+                "${workspaceFolder}/src",
                 "${workspaceFolder}/vender/**",
                 "${workspaceFolder}/vender/assimp/include",
                 "${workspaceFolder}/vender/json/single_include",

@@ -1,6 +1,13 @@
 #include "Renderer.h"
+#include <GLFW/glfw3.h>
+#include "Input.h"
+#include "GlobalSettings.h"
 
-bool renderableImageAttachment::Init(VkExtent2D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect, descriptorPool* pool)
+bool renderableImageAttachment::Init(VkExtent2D extent, 
+                                    VkFormat format, 
+                                    VkImageUsageFlags usage, 
+                                    VkImageAspectFlags aspect, 
+                                    descriptorPool* pool)
 {
     // Create VkImage
     VkImageCreateInfo imageCreateInfo = {
@@ -142,21 +149,37 @@ void Renderer::Init()
 {
     // 创建描述符池
     std::vector<VkDescriptorPoolSize> poolSizes = {
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100 },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 500 },
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 100 }
     };
-    r_descriptorPool = std::make_unique<descriptorPool>(100, poolSizes, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT);
+    r_descriptorPool = std::make_unique<descriptorPool>(100, poolSizes, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT_EXT);
 
     r_commandBuffer = std::make_unique<commandBuffer>();
-    r_commandPool = std::make_unique<commandPool>(Celestiq::Application::GetQueueFamilyIndex(), VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
-    r_commandPool->AllocateBuffers(makeSpanFromOne(r_commandBuffer.get()));
+    Celestiq::Application::Get().GetCommandPoolGraphics()->AllocateBuffers(makeSpanFromOne(r_commandBuffer.get()));
 
     // 栅栏
     r_fence = std::make_unique<fence>();
     // r_semaphore_imageIsAvailable = std::make_unique<semaphore>();
     // r_semaphore_renderingIsOver = std::make_unique<semaphore>();
 
-    // 离屏渲染用 RenderPass
+    // 配置采样器
+    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    samplerInfo.magFilter    = VK_FILTER_LINEAR;
+    samplerInfo.minFilter    = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.maxLod       = 1.0f;
+    // Create sampler
+    samp = std::make_unique<sampler>(samplerInfo);
+
+    r_params = Params{};
+    r_params.frameIndex = 0;
+    r_constantBuffer = std::make_unique<uniformBuffer>();
+    r_constantBuffer->Create(sizeof(Params));
+
+    // 光照阶段用 RenderPass----------------------------------------------------------------------------------------------------
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format         = imageFormat;
     colorAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
@@ -180,11 +203,10 @@ void Renderer::Init()
     VkSubpassDependency dependency{};
     dependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass    = 0;
-    dependency.srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    dependency.srcStageMask  = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    dependency.dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependency.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    dependency.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     VkRenderPassCreateInfo rpInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
     rpInfo.attachmentCount = 1;
@@ -196,7 +218,22 @@ void Renderer::Init()
 
     r_renderPass = std::make_unique<renderPass>(rpInfo);
 
+    // compute阶段图像附件----------------------------------------------------------
+    r_computeImage_writeOnly = std::make_unique<renderableImageAttachment>();
+    r_computeImage_writeOnly->Init(extent,
+                             VK_FORMAT_R32G32B32A32_SFLOAT,
+                             VK_IMAGE_USAGE_STORAGE_BIT,
+                             VK_IMAGE_ASPECT_COLOR_BIT,
+                             r_descriptorPool.get());
 
+    r_computeImage_readOnly = std::make_unique<renderableImageAttachment>();
+    r_computeImage_readOnly->Init(extent,
+                             VK_FORMAT_R32G32B32A32_SFLOAT,
+                             VK_IMAGE_USAGE_STORAGE_BIT,
+                             VK_IMAGE_ASPECT_COLOR_BIT,
+                             r_descriptorPool.get());
+
+    // 光照阶段图像附件及Framebuffer----------------------------------------------------------
     r_onRenderImage = std::make_unique<renderableImageAttachment>();
     if (!r_onRenderImage->Init(extent,
                                imageFormat,
@@ -205,7 +242,6 @@ void Renderer::Init()
                                r_descriptorPool.get())) {
         throw std::runtime_error("Failed to init renderableImageAttachment");
     }
-
 
     VkImageView attachment = r_onRenderImage->GetImageView();
     VkFramebufferCreateInfo fbInfo{ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
@@ -219,19 +255,118 @@ void Renderer::Init()
     r_framebuffers = std::make_unique<framebuffer>();
     r_framebuffers->Create(fbInfo);
 
+    // 场景
+    r_scene = std::make_unique<Scene>();
+    r_scene->initScene();
+    r_scene->initDescriptor(r_descriptorPool.get());
+    r_scene->writeDescriptor();
 
-    // 创建管线
-    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
-    r_pipelineLayout_triangle = std::make_unique<pipelineLayout>(pipelineLayoutCreateInfo);
-    r_shaders["vert"] = std::make_unique<shaderModule>("res/shader_spv/FirstTriangle.vert.spv");
-    r_shaders["frag"] = std::make_unique<shaderModule>("res/shader_spv/FirstTriangle.frag.spv");
-    static VkPipelineShaderStageCreateInfo shaderStageCreateInfos_triangle[2] = {
+    r_scene->getCamera()->addCameraUpdateCallback([this](){
+        r_params.frameIndex = 0;
+    });
+
+    // 图像纹理
+    TextureManager::get().initDescriptorSet(r_descriptorPool.get());
+
+    // 创建compute管线 ---------------------------------------------------------------------------------
+    // 先创建存储图像附件的描述符集布局和描述符集
+    r_descriptorSetLayout_compute = std::make_unique<descriptorSetLayout>();
+    r_descriptorSet_compute = std::make_unique<descriptorSet>();
+    VkDescriptorSetLayoutBinding descriptorSetLayoutBinding_compute[3] ={
+        // 存储图像WriteOnly
+        {
+            .binding = 0,                                       //描述符被绑定到0号binding
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  //类型为存储图像
+            .descriptorCount = 1,                               //个数是1个
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT            //在计算着色器阶段读取存储图像
+        },
+        // 存储图像ReadOnly
+        {
+            .binding = 1,                                       //描述符被绑定到1号binding
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  //类型为存储图像
+            .descriptorCount = 1,                               //个数是1个
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT            //在计算着色器阶段读取存储图像
+        },
+        // 常量缓冲区
+        {
+            .binding = 2,                                       //描述符被绑定到2号binding
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,  //类型为UBO
+            .descriptorCount = 1,                               //个数是1个
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT            //在计算着色器阶段读取存储图像
+        }
+
+    };
+    VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo_compute = {
+        .bindingCount = 3,
+        .pBindings = descriptorSetLayoutBinding_compute
+    };
+    r_descriptorSetLayout_compute->Create(descriptorSetLayoutCreateInfo_compute);
+    r_descriptorPool->AllocateSets(makeSpanFromOne(r_descriptorSet_compute.get()), makeSpanFromOne(r_descriptorSetLayout_compute.get()));
+    // 存储图像
+    VkDescriptorImageInfo imageInfo_writeOnly = {
+        .imageView = r_computeImage_writeOnly->GetImageView(),
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL
+    };
+    VkDescriptorImageInfo imageInfo_readOnly = {
+        .imageView = r_computeImage_readOnly->GetImageView(),
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL
+    };
+    // 常量缓冲区
+    VkDescriptorBufferInfo bufferInfo_camera = {
+        .buffer = r_constantBuffer->getHandle(),
+        .offset = 0,
+        .range = sizeof(Params)
+    };
+    r_descriptorSet_compute->Write(makeSpanFromOne(imageInfo_writeOnly), VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 0);
+    r_descriptorSet_compute->Write(makeSpanFromOne(imageInfo_readOnly), VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1);
+    r_descriptorSet_compute->Write(makeSpanFromOne(bufferInfo_camera), VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2);
+
+    // 将场景、图像纹理和存储图像的描述符集布局合并
+    VkDescriptorSetLayout layouts[3] = {
+        r_scene->getDescriptorSetLayout(),
+        TextureManager::get().getDescriptorSetLayout(),
+        r_descriptorSetLayout_compute->getHandle()
+    };
+    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo_compute = {
+        .setLayoutCount = 3,
+        .pSetLayouts = layouts
+    };
+    r_pipelineLayout_compute = std::make_unique<pipelineLayout>(pipelineLayoutCreateInfo_compute);
+
+    // 创建着色器
+    r_shaders["compute"] = std::make_unique<shaderModule>("res/shader_spv/Deferred_C.comp.spv");
+    VkPipelineShaderStageCreateInfo shaderStageCreateInfos_compute[1] = {
+        r_shaders["compute"]->StageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT)
+    };
+
+    VkComputePipelineCreateInfo computePipelineCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = shaderStageCreateInfos_compute[0],
+        .layout = r_pipelineLayout_compute->getHandle()
+    };
+    r_pipeline_compute = std::make_unique<pipeline>(computePipelineCreateInfo);
+
+    // 创建光照管线 ---------------------------------------------------------------------------------------
+    // 绑定计算阶段的存储图像的描述符布局
+    VkDescriptorSetLayout r_computeImage_layout = r_computeImage_writeOnly->GetDescriptorSetLayout();
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &r_computeImage_layout
+    };
+
+    r_pipelineLayout = std::make_unique<pipelineLayout>(pipelineLayoutInfo);
+
+    // 创建着色器
+    r_shaders["vert"] = std::make_unique<shaderModule>("res/shader_spv/Deferred_L.vert.spv");
+    r_shaders["frag"] = std::make_unique<shaderModule>("res/shader_spv/Deferred_L.frag.spv");
+    VkPipelineShaderStageCreateInfo shaderStageCreateInfos[2] = {
         r_shaders["vert"]->StageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT),
         r_shaders["frag"]->StageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT)
     };
 
     graphicsPipelineCreateInfoPack pipelineCiPack;
-    pipelineCiPack.createInfo.layout = r_pipelineLayout_triangle->getHandle();
+    pipelineCiPack.createInfo.layout = r_pipelineLayout->getHandle();
     pipelineCiPack.createInfo.renderPass = r_renderPass->getHandle();
     pipelineCiPack.inputAssemblyStateCi.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     pipelineCiPack.rasterizationStateCi.lineWidth = 1.0f;
@@ -241,30 +376,129 @@ void Renderer::Init()
     pipelineCiPack.dynamicStates.push_back(VK_DYNAMIC_STATE_SCISSOR);
     pipelineCiPack.UpdateAllArrays();
     pipelineCiPack.createInfo.stageCount = 2;
-    pipelineCiPack.createInfo.pStages = shaderStageCreateInfos_triangle;
-    r_pipeline_triangle = std::make_unique<pipeline>(pipelineCiPack);
+    pipelineCiPack.createInfo.pStages = shaderStageCreateInfos;
+    Mesh::bind_pipeline(pipelineCiPack);
+    r_pipeline = std::make_unique<pipeline>(pipelineCiPack);
+// -----------------------------------------------------------------------------------------
 
+    r_mesh_screen = std::make_unique<Mesh>();
+    r_mesh_screen->set_mesh_screen();
+    r_mesh_screen->create_vertex_buffer();
+}
+
+void Renderer::update()
+{
+    // Debug模式切换
+    if (Celestiq::Input::IsKeyDown(Celestiq::KeyCode::D0)) {
+        r_params.debugMode = 0;
+        r_params.frameIndex = 0; // 切换到Debug模式时重置帧索引
+    }
+    if (Celestiq::Input::IsKeyDown(Celestiq::KeyCode::D1)) {
+        r_params.debugMode = 1;
+    }
+    if (Celestiq::Input::IsKeyDown(Celestiq::KeyCode::D2)) {
+        r_params.debugMode = 2;
+    }
+    if (Celestiq::Input::IsKeyDown(Celestiq::KeyCode::D3)) {
+        r_params.debugMode = 3;
+    }
+    if (Celestiq::Input::IsKeyDown(Celestiq::KeyCode::D4)) {
+        r_params.debugMode = 4;
+    }
+    if (Celestiq::Input::IsKeyDown(Celestiq::KeyCode::D5)) {
+        r_params.debugMode = 5;
+    }
+    if (Celestiq::Input::IsKeyDown(Celestiq::KeyCode::D6)) {
+        r_params.debugMode = 6;
+    }
+    if (Celestiq::Input::IsKeyDown(Celestiq::KeyCode::D7)) {
+        r_params.debugMode = 7;
+    }
 }
 
 void Renderer::drawFrame(VkExtent2D newExtent)
 {
-    resizeImageFramebuffers(newExtent);
-    VkClearValue clearColor = { .color = { 0.2f, 0.2f, 0.2f, 1.f } };
+    // 计算帧时间
+    currentTime = glfwGetTime();
+    deltaTime = currentTime - lastTime;
+    lastTime = currentTime;
 
+    // 更新场景
+    r_scene->update(deltaTime);
+    // 处理窗口相关输入
+    Celestiq::Input::getInstance().update();
+    // 处理渲染器相关输入
+    this->update();
+
+    // 更新常量缓冲区
+    r_constantBuffer->TransferData(&r_params, sizeof(Params));
+
+    resizeImageFramebuffers(newExtent);
+
+    // 开始命令录入
     r_commandBuffer->Begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    // Compute Pass-----------------------------------------------------------------
+    if(r_computeImage_recreate)
+    {
+        // VK_IMAGE_LAYOUT_UNDEFINED -> VK_IMAGE_LAYOUT_GENERAL
+        transitionImageLayout(r_commandBuffer->getHandle(), {r_computeImage_writeOnly.get(), r_computeImage_readOnly.get()},
+                        0, VK_ACCESS_SHADER_READ_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        r_computeImage_recreate = false;
+    } else{
+        // 将着色器可读图像 转换为 存储图像
+        transitionImageLayout(r_commandBuffer->getHandle(), {r_computeImage_writeOnly.get()},
+                        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        transitionImageLayout(r_commandBuffer->getHandle(), {r_computeImage_readOnly.get()},
+                        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    }
+    vkCmdBindPipeline(r_commandBuffer->getHandle(), VK_PIPELINE_BIND_POINT_COMPUTE, r_pipeline_compute->getHandle());
+    VkDescriptorSet sets[3] = {
+        r_scene->getDescriptorSet(),
+        TextureManager::get().getDescriptorSet(),
+        r_descriptorSet_compute->getHandle()
+    };
+    vkCmdBindDescriptorSets(r_commandBuffer->getHandle(), VK_PIPELINE_BIND_POINT_COMPUTE, r_pipelineLayout_compute->getHandle(),
+                            0, 3, sets, 0, nullptr);
+    vkCmdDispatch(r_commandBuffer->getHandle(), ceil(newExtent.width/16), ceil(newExtent.height/16), 1);
+    // 将存储图像 转换为 着色器可读图像
+    transitionImageLayout(r_commandBuffer->getHandle(), {r_computeImage_writeOnly.get(), r_computeImage_readOnly.get()},
+                        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+
+
+    // 光照pass------------------------------------------------------------------------
+    VkClearValue clearColor = { .color = { 0.0f, 0.0f, 0.0f, 1.f } };
     r_renderPass->CmdBegin(r_commandBuffer->getHandle(), r_framebuffers->getHandle(), { {}, newExtent }, makeSpanFromOne(clearColor));
     resizePipeline(newExtent, r_commandBuffer->getHandle());
     /*渲染命令*/
-    vkCmdBindPipeline(r_commandBuffer->getHandle(), VK_PIPELINE_BIND_POINT_GRAPHICS, r_pipeline_triangle->getHandle());
-    vkCmdDraw(r_commandBuffer->getHandle(), 3, 1, 0, 0);
+    VkDescriptorSet r_computeImage_descriptorSet = r_computeImage_writeOnly->GetDescriptorSet();
+    vkCmdBindDescriptorSets(r_commandBuffer->getHandle(), VK_PIPELINE_BIND_POINT_GRAPHICS,
+        r_pipelineLayout->getHandle(), 0, 1, &r_computeImage_descriptorSet, 0, nullptr);
+    vkCmdBindPipeline(r_commandBuffer->getHandle(), VK_PIPELINE_BIND_POINT_GRAPHICS, r_pipeline->getHandle());
+    r_mesh_screen->draw(r_commandBuffer->getHandle());
     /*渲染命令结束*/
     r_renderPass->CmdEnd(r_commandBuffer->getHandle());
-    r_commandBuffer->End();
 
+    // 结束命令录入
+    r_commandBuffer->End();
     SubmitCommandBuffer_Graphics(r_commandBuffer->getHandle(), r_fence->getHandle());
 
+    // 等待绘制命令执行完成
     extent = newExtent;
     r_fence->WaitAndReset();
+    r_params.frameIndex++;
+
+    // 计算着色器中的双图像交换
+    std::swap(r_computeImage_writeOnly, r_computeImage_readOnly);
+    bindImageOfComputePipeline();
+
     ImGui::Image((ImTextureID)r_onRenderImage->GetDescriptorSet(), ImVec2((float)extent.width, (float)extent.height), ImVec2(0, 1), ImVec2(1, 0));
 }
 
@@ -284,6 +518,23 @@ void Renderer::resizeImageFramebuffers(VkExtent2D newExtent)
                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                             VK_IMAGE_ASPECT_COLOR_BIT,
                             r_descriptorPool.get());
+
+    r_computeImage_writeOnly->Resize(newExtent,
+                                  VK_FORMAT_R32G32B32A32_SFLOAT,
+                                  VK_IMAGE_USAGE_STORAGE_BIT,
+                                  VK_IMAGE_ASPECT_COLOR_BIT,
+                                  r_descriptorPool.get());
+
+    r_computeImage_readOnly->Resize(newExtent,
+                                  VK_FORMAT_R32G32B32A32_SFLOAT,
+                                  VK_IMAGE_USAGE_STORAGE_BIT,
+                                  VK_IMAGE_ASPECT_COLOR_BIT,
+                                  r_descriptorPool.get());
+
+    r_computeImage_recreate = true;
+
+    // r_computeImage重新创建了，需要重新更新描述符集
+    bindImageOfComputePipeline();
     
     // 销毁旧的 Framebuffer
     r_framebuffers.reset();
@@ -296,7 +547,6 @@ void Renderer::resizeImageFramebuffers(VkExtent2D newExtent)
     fbInfo.width           = newExtent.width;
     fbInfo.height          = newExtent.height;
     fbInfo.layers          = 1;
-
     r_framebuffers = std::make_unique<framebuffer>();
     r_framebuffers->Create(fbInfo);
 }
@@ -324,36 +574,52 @@ void Renderer::resizePipeline(VkExtent2D newExtent, VkCommandBuffer commandBuffe
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 }
 
-VkResult Renderer::SubmitCommandBuffer_Graphics(VkSubmitInfo &submitInfo, VkFence fence)
+void Renderer::bindImageOfComputePipeline()
 {
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    VkResult result = vkQueueSubmit(Celestiq::Application::GetQueue(), 1, &submitInfo, fence);
-    if (result)
-        std::cout << std::format("[ graphicsBase ] ERROR\nFailed to submit the command buffer!\nError code: {}\n", int32_t(result));
-    return result;
+    // 绑定存储图像的描述符集到计算管线
+    VkDescriptorImageInfo imageInfo_writeOnly = {
+        .imageView = r_computeImage_writeOnly->GetImageView(),
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL
+    };
+    VkDescriptorImageInfo imageInfo_readOnly = {
+        .imageView = r_computeImage_readOnly->GetImageView(),
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL
+    };
+    r_descriptorSet_compute->Write(makeSpanFromOne(imageInfo_writeOnly), VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 0);
+    r_descriptorSet_compute->Write(makeSpanFromOne(imageInfo_readOnly), VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1);
 }
 
-VkResult Renderer::SubmitCommandBuffer_Graphics(VkCommandBuffer commandBuffer, VkSemaphore semaphore_imageIsAvailable, VkSemaphore semaphore_renderingIsOver, VkFence fence, VkPipelineStageFlags waitDstStage_imageIsAvailable)
+void Renderer::transitionImageLayout(VkCommandBuffer cmd, const std::vector<renderableImageAttachment*>& attachments, 
+                                    VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask,
+                                    VkImageLayout oldLayout, VkImageLayout newLayout,
+                                    VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask)
 {
-    VkSubmitInfo submitInfo = {
-        .commandBufferCount = 1,
-        .pCommandBuffers = &commandBuffer
-    };
-    if (semaphore_imageIsAvailable)
-        submitInfo.waitSemaphoreCount = 1,
-        submitInfo.pWaitSemaphores = &semaphore_imageIsAvailable,
-        submitInfo.pWaitDstStageMask = &waitDstStage_imageIsAvailable;
-    if (semaphore_renderingIsOver)
-        submitInfo.signalSemaphoreCount = 1,
-        submitInfo.pSignalSemaphores = &semaphore_renderingIsOver;
-    return SubmitCommandBuffer_Graphics(submitInfo, fence);
-}
+    std::vector<VkImageMemoryBarrier> barriers;
+    barriers.reserve(attachments.size());
 
-VkResult Renderer::SubmitCommandBuffer_Graphics(VkCommandBuffer commandBuffer, VkFence fence)
-{
-    VkSubmitInfo submitInfo = {
-        .commandBufferCount = 1,
-        .pCommandBuffers = &commandBuffer
-    };
-    return SubmitCommandBuffer_Graphics(submitInfo, fence);
+    for (const auto* attachment : attachments)
+    {
+        VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        barrier.srcAccessMask = srcAccessMask;
+        barrier.dstAccessMask = dstAccessMask;
+        barrier.oldLayout     = oldLayout;
+        barrier.newLayout     = newLayout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = attachment->GetImage();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barriers.push_back(barrier);
+    }
+
+    vkCmdPipelineBarrier(cmd,
+                        srcStageMask,
+                        dstStageMask,
+                        0,
+                        0, nullptr,
+                        0, nullptr,
+                        static_cast<uint32_t>(barriers.size()), barriers.data());
 }

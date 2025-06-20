@@ -1,4 +1,5 @@
 #include "Application.h"
+#include "VKBase.h"
 
 //
 // Adapted from Dear ImGui Vulkan example
@@ -34,6 +35,18 @@ extern bool g_ApplicationRunning;
 #define IMGUI_VULKAN_DEBUG_REPORT
 #endif
 
+// 创建静态类成员
+#define DECLARE_STATIC_INSTANCE_GETTER(CLASS_NAME, FUNCTION_NAME)          \
+    std::shared_ptr<CLASS_NAME> FUNCTION_NAME() {                          \
+        static std::shared_ptr<CLASS_NAME> instance;                       \
+        static std::once_flag flag;                                        \
+        std::call_once(flag, []() {                                        \
+            instance = std::make_shared<CLASS_NAME>();                     \
+        });                                                                \
+        return instance;                                                   \
+    }
+
+
 static VkAllocationCallbacks* 	g_Allocator = NULL;
 static VkInstance               g_Instance = VK_NULL_HANDLE;
 static VkPhysicalDevice         g_PhysicalDevice = VK_NULL_HANDLE;
@@ -46,12 +59,10 @@ static VkDebugReportCallbackEXT g_DebugReport = VK_NULL_HANDLE;
 static VkPipelineCache          g_PipelineCache = VK_NULL_HANDLE;
 static VkDescriptorPool         g_DescriptorPool = VK_NULL_HANDLE;
 
-static Celestiq::Vulkan::commandBuffer g_commandBuffer_transfer;
-static Celestiq::Vulkan::commandPool g_commandPool_graphics;
-static Celestiq::Vulkan::commandPool g_commandPool_compute;
 
 static VkPhysicalDeviceMemoryProperties2 g_physicalDeviceMemoryProperties;
 static VkPhysicalDeviceProperties2 g_physicalDeviceProperties;
+static VkPhysicalDeviceFeatures2 g_physicalDeviceFeatures;
 
 static ImGui_ImplVulkanH_Window g_MainWindowData;
 static int                      g_MinImageCount = 2;
@@ -161,6 +172,8 @@ static void SetupVulkan(const char** extensions, uint32_t extensions_count)
 		g_PhysicalDevice = gpus[use_gpu];
 		vkGetPhysicalDeviceProperties(g_PhysicalDevice, &g_physicalDeviceProperties.properties),
 		vkGetPhysicalDeviceMemoryProperties(g_PhysicalDevice, &g_physicalDeviceMemoryProperties.memoryProperties);
+		g_physicalDeviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+		vkGetPhysicalDeviceFeatures2(g_PhysicalDevice, &g_physicalDeviceFeatures);
 		free(gpus);
 	}
 
@@ -209,10 +222,36 @@ static void SetupVulkan(const char** extensions, uint32_t extensions_count)
 
 	// Create Logical Device (with graphics + compute queue)
 	{
-	    int device_extension_count = 1;
-	    const char* device_extensions[] = { "VK_KHR_swapchain" };
+		// 指定拓展，并检查是否支持 ------------------------------
+	    const uint32_t device_extension_count = 2;
+	    const char* device_extensions[] = {
+			"VK_KHR_swapchain",
+			"VK_EXT_descriptor_indexing" // 新增
+		};
 	    const float queue_priority = 1.0f;
 
+		VkPhysicalDeviceDescriptorIndexingFeaturesEXT indexingFeatures{};
+		indexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+		indexingFeatures.pNext = nullptr;
+		
+		// 链接到 g_physicalDeviceFeatures
+		g_physicalDeviceFeatures.pNext = &indexingFeatures;
+		
+		// 查询支持性
+		VkPhysicalDeviceFeatures2 feature2{};
+		feature2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+		feature2.pNext = &indexingFeatures;
+		
+		vkGetPhysicalDeviceFeatures2(g_PhysicalDevice, &feature2);
+		
+		// 启用所需功能
+		indexingFeatures.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+		indexingFeatures.runtimeDescriptorArray = VK_TRUE;
+		indexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
+		indexingFeatures.descriptorBindingVariableDescriptorCount = VK_TRUE;
+		indexingFeatures.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+		
+		// 队列创建信息
 	    VkDeviceQueueCreateInfo queue_info[2] = {};
 	    uint32_t queue_info_count = 0;
 
@@ -231,12 +270,14 @@ static void SetupVulkan(const char** extensions, uint32_t extensions_count)
 	        queue_info_count++;
 	    }
 
+		// 设备创建信息
 	    VkDeviceCreateInfo create_info = {};
 	    create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 	    create_info.queueCreateInfoCount = queue_info_count;
 	    create_info.pQueueCreateInfos = queue_info;
 	    create_info.enabledExtensionCount = device_extension_count;
 	    create_info.ppEnabledExtensionNames = device_extensions;
+		create_info.pNext = &g_physicalDeviceFeatures;  // 添加拓展
 
 	    err = vkCreateDevice(g_PhysicalDevice, &create_info, g_Allocator, &g_Device);
 	    check_vk_result(err);
@@ -491,9 +532,10 @@ namespace Celestiq {
 		const char** extensions = glfwGetRequiredInstanceExtensions(&extensions_count);
 		SetupVulkan(extensions, extensions_count);
 
-		g_commandPool_graphics.Create(g_QueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
-		g_commandPool_graphics.AllocateBuffers(Vulkan::makeSpanFromOne(g_commandBuffer_transfer));
-		g_commandPool_compute.Create(g_QueueFamily_Compute, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+		g_commandPool_graphics = std::make_shared<Vulkan::commandPool>(g_QueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+		g_commandBuffer_transfer = std::make_shared<Vulkan::commandBuffer>();
+		g_commandPool_graphics->AllocateBuffers(Vulkan::makeSpanFromOne(g_commandBuffer_transfer.get()));
+		g_commandPool_compute= std::make_shared<Vulkan::commandPool>(g_QueueFamily_Compute, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
 
 		// Create Window Surface
 		VkSurfaceKHR surface;
@@ -601,6 +643,9 @@ namespace Celestiq {
 
 		for (auto& i : callbacks_destroyDevice)
 			i();
+
+		g_commandPool_compute.reset();
+		g_commandPool_graphics.reset();
 
 		// Free resources in queue
 		for (auto& queue : s_ResourceFreeQueue)
@@ -803,19 +848,19 @@ namespace Celestiq {
         return g_QueueFamily;
     }
 
-    const Vulkan::commandPool &Application::CommandPool_Graphics()
+    const std::shared_ptr<Vulkan::commandPool> Application::GetCommandPoolGraphics()
     {
         return g_commandPool_graphics;
     }
 
-    const Vulkan::commandPool &Application::CommandPool_Compute()
+    const std::shared_ptr<Vulkan::commandPool> Application::GetCommandPoolCompute()
     {
         return g_commandPool_compute;
     }
 
-    const Vulkan::commandBuffer &Application::CommandBuffer_Transfer()
+    const std::shared_ptr<Vulkan::commandBuffer> Application::GetCommandBufferTransfer()
     {
-		return g_commandBuffer_transfer;
+        return g_commandBuffer_transfer;
     }
 
     void Application::SubmitResourceFree(std::function<void()> &&func)

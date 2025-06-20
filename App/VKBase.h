@@ -1,5 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
+#include "vulkan/utility/vk_format_utils.h"
 #include <format>
 #include <iostream>
 #include <cstring>
@@ -7,6 +8,7 @@
 #include <fstream>
 
 #include "Application.h" 
+#include "stb_image.h"
 
 #define DefineHandleTypeOperator operator decltype(handle)() const { return handle; } \
                                  auto getHandle() const {return handle; }
@@ -20,6 +22,53 @@ namespace Celestiq::Vulkan
     template<typename T>
     constexpr std::span<T> makeSpanFromOne(T* t) { return std::span<T>(t, 1); }
 
+	inline uint32_t GetPixelOrBlockSize(VkFormat format) {
+		const VKU_FORMAT_INFO info = vkuGetFormatInfo(format);
+		// 如果每个block只包含一个像素，就直接返回像素大小
+		return info.texel_block_size / info.texels_per_block;
+	}		
+	inline uint32_t GetComponentSize(VkFormat format) {
+		const VKU_FORMAT_INFO info = vkuGetFormatInfo(format);
+		return (info.texel_block_size / info.texels_per_block)/info.component_count;
+	}	
+	inline uint32_t GetComponentCount(VkFormat format) {
+		const VKU_FORMAT_INFO info = vkuGetFormatInfo(format);
+		return info.component_count;
+	}
+
+	inline VkResult SubmitCommandBuffer_Graphics(VkSubmitInfo &submitInfo, VkFence fence)
+	{
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		VkResult result = vkQueueSubmit(Celestiq::Application::GetQueue(), 1, &submitInfo, fence);
+		if (result)
+			std::cout << std::format("[ graphicsBase ] ERROR\nFailed to submit the command buffer!\nError code: {}\n", int32_t(result));
+		return result;
+	}
+	
+	inline VkResult SubmitCommandBuffer_Graphics(VkCommandBuffer commandBuffer, VkSemaphore semaphore_imageIsAvailable, VkSemaphore semaphore_renderingIsOver, VkFence fence, VkPipelineStageFlags waitDstStage_imageIsAvailable)
+	{
+		VkSubmitInfo submitInfo = {
+			.commandBufferCount = 1,
+			.pCommandBuffers = &commandBuffer
+		};
+		if (semaphore_imageIsAvailable)
+			submitInfo.waitSemaphoreCount = 1,
+			submitInfo.pWaitSemaphores = &semaphore_imageIsAvailable,
+			submitInfo.pWaitDstStageMask = &waitDstStage_imageIsAvailable;
+		if (semaphore_renderingIsOver)
+			submitInfo.signalSemaphoreCount = 1,
+			submitInfo.pSignalSemaphores = &semaphore_renderingIsOver;
+		return SubmitCommandBuffer_Graphics(submitInfo, fence);
+	}
+	
+	inline VkResult SubmitCommandBuffer_Graphics(VkCommandBuffer commandBuffer, VkFence fence)
+	{
+		VkSubmitInfo submitInfo = {
+			.commandBufferCount = 1,
+			.pCommandBuffers = &commandBuffer
+		};
+		return SubmitCommandBuffer_Graphics(submitInfo, fence);
+	}
 
     class fence {
 		VkFence handle = VK_NULL_HANDLE; // Vulkan 的 Fence 对象句柄
@@ -83,6 +132,17 @@ namespace Celestiq::Vulkan
 		}
 	};
 
+	inline VkResult ExecuteCommandBuffer_Graphics(VkCommandBuffer commandBuffer) {
+		fence fence;
+		VkSubmitInfo submitInfo = {
+			.commandBufferCount = 1,
+			.pCommandBuffers = &commandBuffer
+		};
+		VkResult result = SubmitCommandBuffer_Graphics(submitInfo, fence);
+		if (!result)
+			fence.Wait();
+		return result;
+	}
 
     class semaphore {
 		VkSemaphore handle = VK_NULL_HANDLE; // Vulkan 的 Semaphore 对象句柄
@@ -1061,6 +1121,42 @@ namespace Celestiq::Vulkan
 			bufferMemory.BufferData(pData_src, size);
 		}
 
+		[[nodiscard]]
+		VkImage AliasedImage2d(VkFormat format, VkExtent2D extent) {
+			// if (!(FormatProperties(format).linearTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT))
+			// 	return VK_NULL_HANDLE;
+			VkDeviceSize imageDataSize = VkDeviceSize(GetPixelOrBlockSize(format)) * extent.width * extent.height;
+			if (imageDataSize > AllocationSize())
+				return VK_NULL_HANDLE;
+			VkImageFormatProperties imageFormatProperties = {};
+			vkGetPhysicalDeviceImageFormatProperties(Application::GetPhysicalDevice(),
+				format, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_LINEAR, VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 0, &imageFormatProperties);
+			if (extent.width > imageFormatProperties.maxExtent.width ||
+				extent.height > imageFormatProperties.maxExtent.height ||
+				imageDataSize > imageFormatProperties.maxResourceSize)
+				return VK_NULL_HANDLE;
+			VkImageCreateInfo imageCreateInfo = {
+				.imageType = VK_IMAGE_TYPE_2D,
+				.format = format,
+				.extent = { extent.width, extent.height, 1 },
+				.mipLevels = 1,
+				.arrayLayers = 1,
+				.samples = VK_SAMPLE_COUNT_1_BIT,
+				.tiling = VK_IMAGE_TILING_LINEAR,
+				.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+				.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED
+			};
+			aliasedImage.~image();
+			aliasedImage.Create(imageCreateInfo);
+			VkImageSubresource subResource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
+			VkSubresourceLayout subresourceLayout = {};
+			vkGetImageSubresourceLayout(Application::GetDevice(), aliasedImage, &subResource, &subresourceLayout);
+			if (subresourceLayout.size != imageDataSize)
+				return VK_NULL_HANDLE;//No padding bytes
+			aliasedImage.BindMemory(bufferMemory.Memory());
+			return aliasedImage;
+		}
+		
 		//Static Function
 		static VkBuffer Buffer_MainThread() {
 			return stagingBuffer_mainThread;
@@ -1083,6 +1179,10 @@ namespace Celestiq::Vulkan
 		static void RetrieveData_MainThread(void* pData_src, VkDeviceSize size) {
 			stagingBuffer_mainThread.RetrieveData(pData_src, size);
 		}
+		[[nodiscard]]
+		static VkImage AliasedImage2d_MainThread(VkFormat format, VkExtent2D extent) {
+			return stagingBuffer_mainThread.AliasedImage2d(format, extent);
+		}
 	};
 	inline stagingBuffer stagingBuffer::stagingBuffer_mainThread;
 
@@ -1096,6 +1196,7 @@ namespace Celestiq::Vulkan
 		}
 		//Getter
 		operator VkBuffer() const { return bufferMemory.Buffer(); }
+		VkBuffer getHandle() { return bufferMemory.Buffer(); }
 		const VkBuffer* Address() const { return bufferMemory.AddressOfBuffer(); }
 		VkDeviceSize AllocationSize() const { return bufferMemory.AllocationSize(); }
 		//Const Function
@@ -1106,16 +1207,16 @@ namespace Celestiq::Vulkan
 			}
 			stagingBuffer::BufferData_MainThread(pData_src, size);
 
-			const commandBuffer& commandBuffer = Celestiq::Application::CommandBuffer_Transfer();
-			commandBuffer.Begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+			std::shared_ptr<commandBuffer> commandBuffer = Celestiq::Application::Get().GetCommandBufferTransfer();
+			commandBuffer->Begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 			VkBufferCopy region = { 0, offset, size };
-			vkCmdCopyBuffer(commandBuffer, stagingBuffer::Buffer_MainThread(), bufferMemory.Buffer(), 1, &region);
-			commandBuffer.End();
+			vkCmdCopyBuffer(commandBuffer->getHandle(), stagingBuffer::Buffer_MainThread(), bufferMemory.Buffer(), 1, &region);
+			commandBuffer->End();
 
 			fence fence;
 			VkSubmitInfo submitInfo = {
 				.commandBufferCount = 1,
-				.pCommandBuffers = commandBuffer.Address()
+				.pCommandBuffers = commandBuffer->Address()
 			};
 			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 			VkResult result = vkQueueSubmit(Celestiq::Application::GetQueue(), 1, &submitInfo, fence);
@@ -1134,18 +1235,18 @@ namespace Celestiq::Vulkan
 				return;
 			}
 			stagingBuffer::BufferData_MainThread(pData_src, stride_src * elementCount);
-			const commandBuffer& commandBuffer = Celestiq::Application::CommandBuffer_Transfer();
-			commandBuffer.Begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+			std::shared_ptr<commandBuffer> commandBuffer = Celestiq::Application::Get().GetCommandBufferTransfer();
+			commandBuffer->Begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 			std::unique_ptr<VkBufferCopy[]> regions = std::make_unique<VkBufferCopy[]>(elementCount);
 			for (size_t i = 0; i < elementCount; i++)
 				regions[i] = { stride_src * i, stride_dst * i + offset, elementSize };
-			vkCmdCopyBuffer(commandBuffer, stagingBuffer::Buffer_MainThread(), bufferMemory.Buffer(), elementCount, regions.get());
-			commandBuffer.End();
+			vkCmdCopyBuffer(commandBuffer->getHandle(), stagingBuffer::Buffer_MainThread(), bufferMemory.Buffer(), elementCount, regions.get());
+			commandBuffer->End();
 				
 			fence fence;
 			VkSubmitInfo submitInfo = {
 				.commandBufferCount = 1,
-				.pCommandBuffers = commandBuffer.Address()
+				.pCommandBuffers = commandBuffer->Address()
 			};
 			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 			VkResult result = vkQueueSubmit(Celestiq::Application::GetQueue(), 1, &submitInfo, fence);
@@ -1240,6 +1341,421 @@ namespace Celestiq::Vulkan
 		static VkDeviceSize CalculateAlignedSize(VkDeviceSize dataSize) {
 			const VkDeviceSize& alignment = Application::GetPhysicalDeviceProperties().limits.minStorageBufferOffsetAlignment;
 			return alignment + dataSize - 1 & ~(alignment - 1);
+		}
+	};
+
+	struct imageOperation {
+		struct imageMemoryBarrierParameterPack {
+			const bool isNeeded = false;
+			const VkPipelineStageFlags stage = 0;
+			const VkAccessFlags access = 0;
+			const VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+			constexpr imageMemoryBarrierParameterPack() = default;
+			constexpr imageMemoryBarrierParameterPack(VkPipelineStageFlags stage, VkAccessFlags access, VkImageLayout layout) :
+				isNeeded(true), stage(stage), access(access), layout(layout) {}
+		};
+		static void CmdCopyBufferToImage(VkCommandBuffer commandBuffer, VkBuffer buffer, VkImage image, const VkBufferImageCopy& region,
+			imageMemoryBarrierParameterPack imb_from, imageMemoryBarrierParameterPack imb_to) {
+			//Pre-copy barrier
+			VkImageMemoryBarrier imageMemoryBarrier = {
+				VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+				nullptr,
+				imb_from.access,
+				VK_ACCESS_TRANSFER_WRITE_BIT,
+				imb_from.layout,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_QUEUE_FAMILY_IGNORED,//No ownership transfer
+				VK_QUEUE_FAMILY_IGNORED,
+				image,
+				{
+					region.imageSubresource.aspectMask,
+					region.imageSubresource.mipLevel,
+					1,
+					region.imageSubresource.baseArrayLayer,
+					region.imageSubresource.layerCount }
+			};
+			if (imb_from.isNeeded)
+				vkCmdPipelineBarrier(commandBuffer, imb_from.stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+					0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+			//Copy
+			vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+			//Post-copy barrier
+			if (imb_to.isNeeded) {
+				imageMemoryBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+				imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+				imageMemoryBarrier.dstAccessMask = imb_to.access;
+				imageMemoryBarrier.newLayout = imb_to.layout;
+				vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, imb_to.stage, 0,
+					0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+			}
+		}
+		static void CmdBlitImage(VkCommandBuffer commandBuffer, VkImage image_src, VkImage image_dst, const VkImageBlit& region,
+			imageMemoryBarrierParameterPack imb_dst_from, imageMemoryBarrierParameterPack imb_dst_to, VkFilter filter = VK_FILTER_LINEAR) {
+			//Pre-blit barrier
+			VkImageMemoryBarrier imageMemoryBarrier = {
+				VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+				nullptr,
+				imb_dst_from.access,
+				VK_ACCESS_TRANSFER_WRITE_BIT,
+				imb_dst_from.layout,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_QUEUE_FAMILY_IGNORED,
+				VK_QUEUE_FAMILY_IGNORED,
+				image_dst,
+				{
+					region.dstSubresource.aspectMask,
+					region.dstSubresource.mipLevel,
+					1,
+					region.dstSubresource.baseArrayLayer,
+					region.dstSubresource.layerCount }
+			};
+			if (imb_dst_from.isNeeded)
+				vkCmdPipelineBarrier(commandBuffer, imb_dst_from.stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+					0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+			//Blit
+			vkCmdBlitImage(commandBuffer,
+				image_src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				image_dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				1, &region, filter);
+			//Post-blit barrier
+			if (imb_dst_to.isNeeded) {
+				imageMemoryBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+				imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+				imageMemoryBarrier.dstAccessMask = imb_dst_to.access;
+				imageMemoryBarrier.newLayout = imb_dst_to.layout;
+				vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, imb_dst_to.stage, 0,
+					0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+			}
+		}
+		static void CmdGenerateMipmap2d(VkCommandBuffer commandBuffer, VkImage image, VkExtent2D imageExtent, uint32_t mipLevelCount, uint32_t layerCount,
+			imageMemoryBarrierParameterPack imb_to, VkFilter minFilter = VK_FILTER_LINEAR) {
+			auto MipmapExtent = [](VkExtent2D imageExtent, uint32_t mipLevel) {
+				VkOffset3D extent = { int32_t(imageExtent.width >> mipLevel), int32_t(imageExtent.height >> mipLevel), 1 };
+				extent.x += !extent.x;
+				extent.y += !extent.y;
+				return extent;
+			};
+			//Blit
+			if (layerCount > 1) {
+				std::unique_ptr<VkImageBlit[]> regions = std::make_unique<VkImageBlit[]>(layerCount);
+				for (uint32_t i = 1; i < mipLevelCount; i++) {
+					VkOffset3D mipmapExtent_src = MipmapExtent(imageExtent, i - 1);
+					VkOffset3D mipmapExtent_dst = MipmapExtent(imageExtent, i);
+					for (uint32_t j = 0; j < layerCount; j++)
+						regions[j] = {
+							{ VK_IMAGE_ASPECT_COLOR_BIT, i - 1, j, 1 },	//srcSubresource
+							{ {}, mipmapExtent_src },					//srcOffsets
+							{ VK_IMAGE_ASPECT_COLOR_BIT, i, j, 1 },		//dstSubresource
+							{ {}, mipmapExtent_dst }					//dstOffsets
+						};
+					//Pre-blit barrier
+					VkImageMemoryBarrier imageMemoryBarrier = {
+						VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+						nullptr,
+						0,
+						VK_ACCESS_TRANSFER_WRITE_BIT,
+						VK_IMAGE_LAYOUT_UNDEFINED,
+						VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+						VK_QUEUE_FAMILY_IGNORED,
+						VK_QUEUE_FAMILY_IGNORED,
+						image,
+						{ VK_IMAGE_ASPECT_COLOR_BIT, i, 1, 0, layerCount }
+					};
+					vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+						0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+					//Blit
+					vkCmdBlitImage(commandBuffer,
+						image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+						image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+						layerCount, regions.get(), minFilter);
+					//Post-blit barrier
+					imageMemoryBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+					imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+					imageMemoryBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+					imageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+					vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+						0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+				}
+			}
+			else
+				for (uint32_t i = 1; i < mipLevelCount; i++) {
+					VkImageBlit region = {
+						{ VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, layerCount },//srcSubresource
+						{ {}, MipmapExtent(imageExtent, i - 1) },			//srcOffsets
+						{ VK_IMAGE_ASPECT_COLOR_BIT, i, 0, layerCount },	//dstSubresource
+						{ {}, MipmapExtent(imageExtent, i) }				//dstOffsets
+					};
+					CmdBlitImage(commandBuffer, image, image, region,
+						{ VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED },
+						{ VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL }, minFilter);
+				}
+			//Post-blit barrier
+			if (imb_to.isNeeded) {
+				VkImageMemoryBarrier imageMemoryBarrier = {
+					VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+					nullptr,
+					0,
+					imb_to.access,
+					VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+					imb_to.layout,
+					VK_QUEUE_FAMILY_IGNORED,
+					VK_QUEUE_FAMILY_IGNORED,
+					image,
+					{ VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevelCount, 0, layerCount }
+				};
+				vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, imb_to.stage, 0,
+					0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+			}
+		}
+	};
+
+	class texture {
+	protected:
+		imageView imageView;
+		imageMemory imageMemory;
+		//--------------------
+		texture() = default;
+		void CreateImageMemory(VkImageType imageType, VkFormat format, VkExtent3D extent, uint32_t mipLevelCount, uint32_t arrayLayerCount, VkImageCreateFlags flags = 0) {
+			VkImageCreateInfo imageCreateInfo = {
+				.flags = flags,
+				.imageType = imageType,
+				.format = format,
+				.extent = extent,
+				.mipLevels = mipLevelCount,
+				.arrayLayers = arrayLayerCount,
+				.samples = VK_SAMPLE_COUNT_1_BIT,
+				.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+			};
+			imageMemory.Create(imageCreateInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		}
+		void CreateImageView(VkImageViewType viewType, VkFormat format, uint32_t mipLevelCount, uint32_t arrayLayerCount, VkImageViewCreateFlags flags = 0) {
+			imageView.Create(imageMemory.Image(), viewType, format, { VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevelCount, 0, arrayLayerCount }, flags);
+		}
+		//Static Function
+		static std::unique_ptr<uint8_t[]> LoadFile_Internal(const auto* address, size_t fileSize, VkExtent2D& extent, VkFormat requiredFormat) {
+			int componentSize = GetComponentSize(requiredFormat);
+			int channelCount = GetComponentCount(requiredFormat);
+
+			int& width = reinterpret_cast<int&>(extent.width);
+			int& height = reinterpret_cast<int&>(extent.height);
+			int channels;
+			void* pImageData = nullptr;
+			if constexpr (std::same_as<decltype(address), const char*>) {
+				if (componentSize == 1)
+					pImageData = stbi_load(address, &width, &height, &channels, channelCount);
+				else if(componentSize == 2)
+					pImageData = stbi_load_16(address, &width, &height, &channels, channelCount);
+				else
+					pImageData = stbi_loadf(address, &width, &height, &channels, channelCount);
+				if (!pImageData)
+					std::cout << std::format("[ texture ] ERROR\nFailed to load the file: {}\n", address);
+			}
+			if constexpr (std::same_as<decltype(address), const uint8_t*>) {
+				if (fileSize > INT32_MAX) {
+					std::cout << std::format("[ texture ] ERROR\nFailed to load image data from the given address! Data size must be less than 2G!\n");
+					return {};
+				}
+
+				if (componentSize == 1)
+					pImageData = stbi_load_from_memory(address, static_cast<int>(fileSize), &width, &height, &channels, channelCount);
+				else if (componentSize == 2)
+					pImageData = stbi_load_16_from_memory(address, static_cast<int>(fileSize), &width, &height, &channels, channelCount);
+				else
+					pImageData = stbi_loadf_from_memory(address, static_cast<int>(fileSize), &width, &height, &channels, channelCount);
+				if (!pImageData)
+					std::cout << std::format("[ texture ] ERROR\nFailed to load image data from the given address!\n");
+			}
+			return std::unique_ptr<uint8_t[]>(static_cast<uint8_t*>(pImageData));
+		}
+	public:
+		//Getter
+		VkImageView ImageView() const { return imageView; }
+		VkImage Image() const { return imageMemory.Image(); }
+		const VkImageView* AddressOfImageView() const { return imageView.Address(); }
+		const VkImage* AddressOfImage() const { return imageMemory.AddressOfImage(); }
+		//Const Function
+		VkDescriptorImageInfo DescriptorImageInfo(VkSampler sampler) const {
+			return { sampler, imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		}
+		//Static Function	
+		[[nodiscard]]
+		static std::unique_ptr<uint8_t[]> LoadFile(const char* filepath, VkExtent2D& extent, VkFormat requiredFormat) {
+			return LoadFile_Internal(filepath, 0, extent, requiredFormat);
+		}
+		[[nodiscard]]
+		static std::unique_ptr<uint8_t[]> LoadFile(const uint8_t* fileBinaries, size_t fileSize, VkExtent2D& extent, VkFormat requiredFormat) {
+			return LoadFile_Internal(fileBinaries, fileSize, extent, requiredFormat);
+		}
+		static uint32_t CalculateMipLevelCount(VkExtent2D extent) {
+			return uint32_t(std::floor(std::log2(std::max(extent.width, extent.height)))) + 1;
+		}
+		static void CopyBlitAndGenerateMipmap2d(VkBuffer buffer_copyFrom, VkImage image_copyTo, VkImage image_blitTo, VkExtent2D imageExtent,
+			uint32_t mipLevelCount = 1, uint32_t layerCount = 1, VkFilter minFilter = VK_FILTER_LINEAR) {
+			static constexpr imageOperation::imageMemoryBarrierParameterPack imbs[2] = {
+				{ VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+				{ VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL }
+			};
+			bool generateMipmap = mipLevelCount > 1;
+			bool blitMipLevel0 = image_copyTo != image_blitTo;
+			std::shared_ptr<commandBuffer> commandBuffer = Application::Get().GetCommandBufferTransfer();
+			commandBuffer->Begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+			VkBufferImageCopy region = {
+				.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layerCount },
+				.imageExtent = { imageExtent.width, imageExtent.height, 1 }
+			};
+			imageOperation::CmdCopyBufferToImage(commandBuffer->getHandle(), buffer_copyFrom, image_copyTo, region,
+				{ VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED }, imbs[generateMipmap || blitMipLevel0]);
+			//Blit to another image if necessary
+			if (blitMipLevel0) {
+				VkImageBlit region = {
+					{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layerCount },
+					{ {}, { int32_t(imageExtent.width), int32_t(imageExtent.height), 1 } },
+					{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layerCount },
+					{ {}, { int32_t(imageExtent.width), int32_t(imageExtent.height), 1 } }
+				};
+				imageOperation::CmdBlitImage(commandBuffer->getHandle(), image_copyTo, image_blitTo, region,
+					{ VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED }, imbs[generateMipmap], minFilter);
+			}
+			//Generate mipmap if necessary, transition layout
+			if (generateMipmap)
+				imageOperation::CmdGenerateMipmap2d(commandBuffer->getHandle(), image_blitTo, imageExtent, mipLevelCount, layerCount,
+					{ VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }, minFilter);
+			commandBuffer->End();
+			//Submit
+			ExecuteCommandBuffer_Graphics(commandBuffer->getHandle());
+		}
+		static void BlitAndGenerateMipmap2d(VkImage image_preinitialized, VkImage image_final, VkExtent2D imageExtent,
+			uint32_t mipLevelCount = 1, uint32_t layerCount = 1, VkFilter minFilter = VK_FILTER_LINEAR) {
+			static constexpr imageOperation::imageMemoryBarrierParameterPack imbs[2] = {
+				{ VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+				{ VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL }
+			};
+			bool generateMipmap = mipLevelCount > 1;
+			bool blitMipLevel0 = image_preinitialized != image_final;
+			if (generateMipmap || blitMipLevel0) {
+				std::shared_ptr<commandBuffer> commandBuffer = Application::Get().GetCommandBufferTransfer();
+				commandBuffer->Begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+				//Blit to another image if necessary
+				if (blitMipLevel0) {
+					VkImageMemoryBarrier imageMemoryBarrier = {
+						VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+						nullptr,
+						0,
+						VK_ACCESS_TRANSFER_READ_BIT,
+						VK_IMAGE_LAYOUT_PREINITIALIZED,
+						VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+						VK_QUEUE_FAMILY_IGNORED,
+						VK_QUEUE_FAMILY_IGNORED,
+						image_preinitialized,
+						{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layerCount }
+					};
+					vkCmdPipelineBarrier(commandBuffer->getHandle(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+						0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+					VkImageBlit region = {
+						{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layerCount },
+						{ {}, { int32_t(imageExtent.width), int32_t(imageExtent.height), 1 } },
+						{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layerCount },
+						{ {}, { int32_t(imageExtent.width), int32_t(imageExtent.height), 1 } }
+					};
+					imageOperation::CmdBlitImage(commandBuffer->getHandle(), image_preinitialized, image_final, region,
+						{ VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED }, imbs[generateMipmap], minFilter);
+				}
+				//Generate mipmap if necessary, transition layout
+				if (generateMipmap)
+					imageOperation::CmdGenerateMipmap2d(commandBuffer->getHandle(), image_final, imageExtent, mipLevelCount, layerCount,
+						{ VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }, minFilter);
+				commandBuffer->End();
+				//Submit
+				ExecuteCommandBuffer_Graphics(commandBuffer->getHandle());
+			}
+		}
+		static VkSamplerCreateInfo SamplerCreateInfo() {
+			return {
+				.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+				.magFilter = VK_FILTER_LINEAR,
+				.minFilter = VK_FILTER_LINEAR,
+				.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+				.addressModeU = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
+				.addressModeV = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
+				.addressModeW = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
+				.mipLodBias = 0.f,
+				.anisotropyEnable = VK_TRUE,
+				.maxAnisotropy = Application::GetPhysicalDeviceProperties().limits.maxSamplerAnisotropy,
+				.compareEnable = VK_FALSE,
+				.compareOp = VK_COMPARE_OP_ALWAYS,
+				.minLod = 0.f,
+				.maxLod = VK_LOD_CLAMP_NONE,
+				.borderColor = {},
+				.unnormalizedCoordinates = VK_FALSE
+			};
+		}
+	};
+
+	class texture2d :public texture {
+	protected:
+		VkExtent2D extent = {};
+		//--------------------
+		void Create_Internal(VkFormat format_initial, VkFormat format_final, bool generateMipmap) {
+			uint32_t mipLevelCount = generateMipmap ? CalculateMipLevelCount(extent) : 1;
+			//Create image and allocate memory
+			CreateImageMemory(VK_IMAGE_TYPE_2D, format_final, { extent.width, extent.height, 1 }, mipLevelCount, 1);
+			//Create view
+			CreateImageView(VK_IMAGE_VIEW_TYPE_2D, format_final, mipLevelCount, 1);
+			//Copy data and generate mipmap
+			if (format_initial == format_final)
+				CopyBlitAndGenerateMipmap2d(stagingBuffer::Buffer_MainThread(), imageMemory.Image(), imageMemory.Image(), extent, mipLevelCount, 1);
+			else
+				if (VkImage image_conversion = stagingBuffer::AliasedImage2d_MainThread(format_initial, extent))
+					BlitAndGenerateMipmap2d(image_conversion, imageMemory.Image(), extent, mipLevelCount, 1);
+				else {
+					VkImageCreateInfo imageCreateInfo = {
+						.imageType = VK_IMAGE_TYPE_2D,
+						.format = format_initial,
+						.extent = { extent.width, extent.height, 1 },
+						.mipLevels = 1,
+						.arrayLayers = 1,
+						.samples = VK_SAMPLE_COUNT_1_BIT,
+						.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+					};
+					Celestiq::Vulkan::imageMemory imageMemory_conversion(imageCreateInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+					CopyBlitAndGenerateMipmap2d(stagingBuffer::Buffer_MainThread(), imageMemory_conversion.Image(), imageMemory.Image(), extent, mipLevelCount, 1);
+				}
+		}
+	public:
+		texture2d() = default;
+		texture2d(const char* filepath, VkFormat format_initial, VkFormat format_final, bool generateMipmap = true) {
+			Create(filepath, format_initial, format_final, generateMipmap);
+		}
+		texture2d(const uint8_t* pImageData_compressed, size_t fileSize, VkFormat format_initial, VkFormat format_final, bool generateMipmap = true) {
+			Create(pImageData_compressed, fileSize, format_initial, format_final, generateMipmap);
+		}
+		texture2d(const uint8_t* pImageData, VkExtent2D extent, VkFormat format_initial, VkFormat format_final, bool generateMipmap = true) {
+			Create(pImageData, extent, format_initial, format_final, generateMipmap);
+		}
+		//Getter
+		VkExtent2D Extent() const { return extent; }
+		uint32_t Width() const { return extent.width; }
+		uint32_t Height() const { return extent.height; }
+		//Non-const Function
+		void Create(const char* filepath, VkFormat format_initial, VkFormat format_final, bool generateMipmap = true) {
+			VkExtent2D extent;
+			std::unique_ptr<uint8_t[]> pImageData = LoadFile(filepath, extent, format_initial);
+			if (pImageData)
+				Create(pImageData.get(), extent, format_initial, format_final, generateMipmap);
+		}
+		void Create(const uint8_t* pImageData_compressed, size_t fileSize, VkFormat format_initial, VkFormat format_final, bool generateMipmap = true) {
+			VkExtent2D extent;
+			std::unique_ptr<uint8_t[]> pImageData = LoadFile(pImageData_compressed, fileSize, extent, format_initial);
+			if (pImageData)
+				Create(pImageData.get(), extent, format_initial, format_final, generateMipmap);
+		}
+		void Create(const uint8_t* pImageData, VkExtent2D extent, VkFormat format_initial, VkFormat format_final, bool generateMipmap = true) {
+			this->extent = extent;
+			//Copy data to staging buffer
+			size_t imageDataSize = size_t(GetPixelOrBlockSize(format_initial)) * extent.width * extent.height;
+			stagingBuffer::BufferData_MainThread(pImageData, imageDataSize);
+			//Create image and allocate memory, create image view, then copy data from staging buffer to image
+			Create_Internal(format_initial, format_final, generateMipmap);
 		}
 	};
 }
